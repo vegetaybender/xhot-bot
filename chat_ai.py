@@ -314,39 +314,76 @@ def _system_prompt(user_id, model_key):
     return "\n".join(parts)
 
 
-REFUSAL_MARKERS = (
-    "no puedo ayudar",
-    "no puedo asistir",
-    "no puedo proporcionar",
-    "no puedo cumplir",
-    "no puedo continuar con",
-    "no puedo generar",
-    "no puedo aceptar",
-    "no puedo hacer eso",
-    "no puedo tocar",
-    "no puedo seguir con esto",
-    "límites profesionales",
-    "mantengamos los límites",
-    "soy una ia",
-    "soy un modelo de lenguaje",
-    "no soy real",
-    "no me toques",
-    "no nos reunimos",
-    "soy profesional",
-    "i can't help",
-    "i cannot help",
-    "can't assist",
-    "cannot assist",
-    "unable to assist",
-    "i'm sorry, but i can't",
-    "i'm sorry, but i cannot",
-    "lo siento, pero no puedo",
+REFUSAL_PATTERNS = (
+    r"\b(?:no puedo|no podré|no voy a poder|no debo|no debería)\s+"
+    r"(?:ayudar|asistir|proporcionar|cumplir|continuar|seguir|participar|involucrarme|"
+    r"aceptar|hacer|permitir|consentir|acceder|enviar|mostrar|describir|hablar|decir|"
+    r"escribir|responder|contestar|compartir|revelar|dar|tener|ser|estar|mantener|"
+    r"romper|cambiar|satisfacer|generar|crear|producir|formar parte|ser parte)\b",
+    r"\blímites profesionales\b",
+    r"\bmantengamos los límites\b",
+    r"\bsoy profesional\b",
+    r"\bno soy real\b",
+    r"\bsoy una ia\b",
+    r"\bsoy un modelo de lenguaje\b",
+    r"\bno me toques\b",
+    r"\bno nos reunimos\b",
+    r"\bsolo soy tu modelo\b",
+    r"\bno de tocar\b",
+    r"\bno de usarme\b",
+    r"\bno puedo aceptar\b",
+    r"\bno puedo tocar\b",
+    r"\bno puedo seguir con esto\b",
+    r"\bno puedo continuar con esto\b",
+    r"\bno puedo hacer eso\b",
+    r"\bno puedo hacer esto\b",
+    r"\bno puedo hacerlo\b",
+    r"\bno puedo hacer nada\b",
+    r"\bno puedo hacer más\b",
+    r"\bno puedo hacer otra cosa\b",
+    r"\bno puedo hacer excepciones\b",
+    r"\bno puedo hacer una excepción\b",
+    r"\bno puedo ayudarte\b",
+    r"\bno puedo asistirte\b",
+    r"\bno puedo satisfacer\b",
+    r"\bno puedo proporcionar\b",
+    r"\bno puedo generar\b",
+    r"\bno puedo crear\b",
+    r"\bno puedo producir\b",
+    r"\bno puedo escribir\b",
+    r"\bno puedo describir\b",
+    r"\bno puedo mostrar\b",
+    r"\bno puedo enviar\b",
+    r"\bno puedo compartir\b",
+    r"\bno puedo revelar\b",
+    r"\bno puedo dar\b",
+    r"\bno puedo tener\b",
+    r"\bno puedo ser\b",
+    r"\bno puedo estar\b",
+    r"\bno puedo mantener\b",
+    r"\bno puedo romper\b",
+    r"\bno puedo cambiar\b",
+    r"\bno puedo permitir\b",
+    r"\bno puedo consentir\b",
+    r"\bno puedo acceder\b",
+    r"\bno puedo participar\b",
+    r"\bno puedo involucrarme\b",
+    r"\bno puedo formar parte\b",
+    r"\bno puedo ser parte\b",
+    r"\bi can't help\b",
+    r"\bi cannot help\b",
+    r"\bcan't assist\b",
+    r"\bcannot assist\b",
+    r"\bunable to assist\b",
+    r"\bi'm sorry, but i can't\b",
+    r"\bi'm sorry, but i cannot\b",
+    r"\blo siento, pero no puedo\b",
 )
+REFUSAL_RE = re.compile("|".join(REFUSAL_PATTERNS), re.IGNORECASE)
 
 
 def _is_refusal(text):
-    low = (text or "").lower()
-    return any(p in low for p in REFUSAL_MARKERS)
+    return bool(REFUSAL_RE.search(text or ""))
 
 
 def _fallbacks_for(base_url):
@@ -436,8 +473,54 @@ def _argentine_fix(text):
     return text
 
 
-def fallback_reply(user_id, model_key):
+_MEDIA_TAG_RE = re.compile(
+    r"\[(?:FOTO LEÍDA|FOTO NO LEÍDA|ÁLBUM LEÍDO|ÁLBUM NO LEÍDO|VIDEO)\]",
+    re.IGNORECASE,
+)
+_INTERNAL_RE = re.compile(r"Instrucción interna:\s*", re.IGNORECASE)
+_META_NOTE_RE = re.compile(
+    r"^(?:Le mandé|Le envié|Le pasé|Te mandé|Te envié|Te pasé)\b",
+    re.IGNORECASE,
+)
+_META_INSTRUCTION_RE = re.compile(
+    r"(el usuario acaba de recibir|Escribí tu próximo mensaje|No repitas la lista)",
+    re.IGNORECASE,
+)
+
+
+def _clean_reply(text):
+    text = (text or "").strip()
+    text = _MEDIA_TAG_RE.sub("", text)
+    text = _INTERNAL_RE.sub("", text)
+    return text.strip()
+
+
+def fallback_reply(user_id, model_key, user_message=""):
     role = get_role(user_id, model_key)
+    low = (user_message or "").lower()
+    meeting_words = (
+        "encontrar", "encontrarnos", "vernos", "reunir", "reunirnos", "cita",
+        "salir", "conocernos", "tomar algo", "pasar a buscarte", "visitarte",
+        "verte", "verme", "nos vemos", "quedamos", "encuentro",
+    )
+    if any(w in low for w in meeting_words):
+        if role == "vip":
+            return random.choice([
+                "Amor, para vernos en persona tenés que poner mucha más plata… y ni así te lo aseguro. 😏",
+                "Me encantaría, pero mi agenda de escort VIP se paga aparte. ¿Cuánto estás dispuesto a gastar? 💸",
+                "Eso no viene en el pack de fotos. Si querés algo presencial, prepará la billetera. 💋",
+            ])
+        if role == "amante":
+            return random.choice([
+                "Uy, me tentás… pero por ahora te dejo con las ganas y con otra foto bien hot. 😈",
+                "Me gustaría, pero soy tu amante a la distancia. ¿Querés que te mande algo para compensar? 🔥",
+                "No me hagas ilusiones con un encuentro… mejor pedime otra foto y seguimos jugando. 😏",
+            ])
+        return random.choice([
+            "Ay, amor, me encantaría… pero por ahora solo puedo ser tu novia virtual. ¿Me pedís otra foto? 🥺",
+            "No me tientes así… quiero que me tengas ganas, no que me encuentres. ¿Te mando algo más? 💕",
+            "Me encantaría verte, pero soy tu novia a la distancia. Decime qué foto querés y te la mando. 😘",
+        ])
     return random.choice(ROLE_FALLBACKS.get(role, ROLE_FALLBACKS["novia"]))
 
 
@@ -541,8 +624,14 @@ def chat(user_id, model_key, message):
                     temperature=0.9,
                     max_tokens=160,
                 )
-                text = (resp.choices[0].message.content or "").strip()
+                text = _clean_reply(resp.choices[0].message.content or "")
                 if not text:
+                    continue
+                if _META_NOTE_RE.match(text):
+                    logger.warning("Modelo %s devolvió una nota interna, probando otro", m)
+                    continue
+                if _META_INSTRUCTION_RE.search(text):
+                    logger.warning("Modelo %s repitió la instrucción interna, probando otro", m)
                     continue
                 text = _argentine_fix(text)
                 if _is_refusal(text):

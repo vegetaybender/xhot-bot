@@ -222,6 +222,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
 
             chat_reply = None
+            prompt = ""
             if grok_chat.is_enabled():
                 if mode == "rol_fotos" and album_desc:
                     prompt = (
@@ -239,7 +240,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     )
                 chat_reply = grok_chat.chat(update.effective_user.id, model_key, prompt)
             if not chat_reply:
-                chat_reply = grok_chat.fallback_reply(update.effective_user.id, model_key)
+                chat_reply = grok_chat.fallback_reply(update.effective_user.id, model_key, prompt)
             await query.message.reply_text(chat_reply, reply_markup=model_menu_keyboard(model_key))
         return
     kind = None
@@ -330,6 +331,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
 
         chat_reply = None
+        prompt = ""
         if grok_chat.is_enabled():
             media_word = "video" if is_video else "foto"
             if mode == "rol_fotos" and description:
@@ -348,7 +350,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
             chat_reply = grok_chat.chat(update.effective_user.id, model_key, prompt)
         if not chat_reply:
-            chat_reply = grok_chat.fallback_reply(update.effective_user.id, model_key)
+            chat_reply = grok_chat.fallback_reply(update.effective_user.id, model_key, prompt)
         await query.message.reply_text(chat_reply, reply_markup=model_menu_keyboard(model_key))
 
 
@@ -546,7 +548,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply = grok_chat.chat(update.effective_user.id, model_key, text)
         if not reply:
             if update.effective_user:
-                reply = grok_chat.fallback_reply(update.effective_user.id, model_key)
+                reply = grok_chat.fallback_reply(update.effective_user.id, model_key, text)
             else:
                 reply = random.choice(FREE_TEXT_REPLIES)
         await update.message.reply_text(reply, reply_markup=model_menu_keyboard(model_key))
@@ -562,6 +564,7 @@ def main():
     if not BOT_TOKEN:
         raise RuntimeError("Falta BOT_TOKEN")
 
+    logger.info("Xhot Bot - modos disponibles: %s", ", ".join(grok_chat.mode_names()))
     request = HTTPXRequest(connect_timeout=20, read_timeout=120, write_timeout=120, pool_timeout=20)
     app = Application.builder().token(BOT_TOKEN).request(request).build()
     app.add_handler(CommandHandler("start", start))
