@@ -9,7 +9,7 @@ try:
 except Exception:
     _OPENAI_AVAILABLE = False
 
-_client = None
+_clients = {}
 _histories = {}
 
 
@@ -21,18 +21,35 @@ def _env(*names, default=""):
     return default
 
 
+def _api_keys():
+    raw = _env("CHAT_API_KEYS")
+    keys = [k.strip() for k in raw.split(",") if k.strip()]
+    if not keys:
+        single = _env("CHAT_API_KEY", "GROK_API_KEY", "OPENAI_API_KEY")
+        if single:
+            keys = [single]
+    return keys
+
+
 def is_enabled():
-    return _OPENAI_AVAILABLE and bool(_env("CHAT_API_KEY", "GROK_API_KEY", "OPENAI_API_KEY"))
+    return _OPENAI_AVAILABLE and bool(_api_keys())
 
 
-def get_client():
-    global _client
-    if _client is None and is_enabled():
-        _client = OpenAI(
-            api_key=_env("CHAT_API_KEY", "GROK_API_KEY", "OPENAI_API_KEY"),
+def get_client(key=None):
+    keys = _api_keys()
+    if not keys:
+        return None
+    key = key or keys[0]
+    client = _clients.get(key)
+    if client is None:
+        client = OpenAI(
+            api_key=key,
             base_url=_env("CHAT_BASE_URL", "GROK_BASE_URL", "OPENAI_BASE_URL", default="https://api.x.ai/v1"),
+            timeout=40.0,
+            max_retries=0,
         )
-    return _client
+        _clients[key] = client
+    return client
 
 
 PERSONAS = {
@@ -182,6 +199,10 @@ def _system_prompt(user_id, model_key):
     )
     parts.append(EXPLICIT_LEVELS.get(get_level(user_id), EXPLICIT_LEVELS["medio"]))
     parts.append("Respondé siempre en personaje, sin salir del rol ni pedir disculpas.")
+    parts.append(
+        "Las notas internas que empiezan con [FOTO, [ÁLBUM o [VIDEO no se repiten ni se mencionan: "
+        "son solo para que sepas qué contenido acabás de mandar."
+    )
     return "\n".join(parts)
 
 
@@ -241,15 +262,43 @@ def _fallbacks_for(base_url):
     return []
 
 
-def note_media(user_id, model_key, description, kind="foto"):
+def _clip(text, limit=400):
+    text = (text or "").strip()
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1].rstrip() + "…"
+
+
+def _is_media_note(msg):
+    content = msg.get("content", "") or ""
+    return msg.get("role") == "assistant" and content.startswith(("[FOTO", "[ÁLBUM", "[VIDEO"))
+
+
+def note_media(user_id, model_key, description, kind="foto", read=True):
     if not is_enabled():
         return
     hist = _histories.setdefault(_key(user_id, model_key), [])
     if not hist:
         hist.append({"role": "system", "content": _system_prompt(user_id, model_key)})
+
     labels = {"foto": "una foto", "video": "un video", "album": "un álbum de fotos"}
     label = labels.get(kind, "una foto")
-    hist.append({"role": "assistant", "content": f"Le envié al usuario {label}: {description}"})
+
+    if kind == "album":
+        tag = "[ÁLBUM LEÍDO]" if read else "[ÁLBUM NO LEÍDO]"
+    elif kind == "video":
+        tag = "[VIDEO]"
+    else:
+        tag = "[FOTO LEÍDA]" if read else "[FOTO NO LEÍDA]"
+
+    desc = _clip(description, 140)
+    hist.append({"role": "assistant", "content": f"{tag} Le mandé {label}: {desc}"})
+
+    # Guardar solo las últimas 2 notas de media para no gastar tokens.
+    media_msgs = [m for m in hist if _is_media_note(m)]
+    if len(media_msgs) > 2:
+        old_ids = {id(m) for m in media_msgs[:-2]}
+        hist[:] = [m for m in hist if id(m) not in old_ids]
 
 
 def reset(user_id, model_key=None):
@@ -263,16 +312,18 @@ def reset(user_id, model_key=None):
 def chat(user_id, model_key, message):
     if not is_enabled():
         return None
-    client = get_client()
-    if client is None:
+
+    keys = _api_keys()
+    if not keys:
         return None
 
     hist = _histories.setdefault(_key(user_id, model_key), [])
     if not hist:
         hist.append({"role": "system", "content": _system_prompt(user_id, model_key)})
 
-    hist.append({"role": "user", "content": message})
-    trimmed = [hist[0]] + hist[-16:]
+    hist.append({"role": "user", "content": _clip(message, 400)})
+    # Historial corto: 10 mensajes + system. Ahorra tokens y mantiene contexto.
+    trimmed = [hist[0]] + hist[-10:]
 
     base_url = _env("CHAT_BASE_URL", "GROK_BASE_URL", "OPENAI_BASE_URL", default="https://api.x.ai/v1")
     low_url = base_url.lower()
@@ -299,36 +350,52 @@ def chat(user_id, model_key, message):
     seen = set()
     candidate_models = [m for m in candidate_models if not (m in seen or seen.add(m))]
 
-    def _call(m):
-        return client.chat.completions.create(
-            model=m,
-            messages=trimmed,
-            temperature=0.9,
-            max_tokens=250,
-        )
-
     reply = None
     last_error = None
-    for m in candidate_models:
-        try:
-            resp = _call(m)
-            text = (resp.choices[0].message.content or "").strip()
-            if not text:
-                continue
-            if _is_refusal(text):
-                logger.warning("Modelo %s rechazó la petición, probando otro", m)
-                continue
-            reply = text
-            logger.info("Chat IA OK con modelo: %s", m)
-            break
-        except Exception as e:
-            last_error = e
-            logger.warning("Modelo %s no disponible: %s", m, e)
+
+    # Rotar entre todas las keys configuradas en CHAT_API_KEYS.
+    for key_index, key in enumerate(keys):
+        client = get_client(key)
+        if client is None:
             continue
+        for m in candidate_models:
+            try:
+                resp = client.chat.completions.create(
+                    model=m,
+                    messages=trimmed,
+                    temperature=0.9,
+                    max_tokens=160,
+                )
+                text = (resp.choices[0].message.content or "").strip()
+                if not text:
+                    continue
+                if _is_refusal(text):
+                    logger.warning("Modelo %s rechazó la petición, probando otro", m)
+                    continue
+                reply = text
+                logger.info(
+                    "Chat IA OK con modelo: %s (key %d/%d)",
+                    m,
+                    key_index + 1,
+                    len(keys),
+                )
+                break
+            except Exception as e:
+                last_error = e
+                logger.warning(
+                    "Modelo %s (key %d/%d) no disponible: %s",
+                    m,
+                    key_index + 1,
+                    len(keys),
+                    e,
+                )
+                continue
+        if reply:
+            break
 
     if not reply:
         logger.warning("Error llamando al chat IA: %s", last_error)
         return None
 
-    hist.append({"role": "assistant", "content": reply})
+    hist.append({"role": "assistant", "content": _clip(reply, 500)})
     return reply

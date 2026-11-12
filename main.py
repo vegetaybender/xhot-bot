@@ -134,27 +134,24 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.reply_text("No pude enviar el álbum 😕", reply_markup=model_menu_keyboard(model_key))
             return
         if update.effective_user:
-            album_desc = vision.describe_images(album_images, kind="album")
+            album_desc = vision.describe_images(
+                album_images,
+                kind="album",
+                cache_key=tuple(img["id"] for img in images),
+            )
             grok_chat.note_media(
                 update.effective_user.id,
                 model_key,
-                album_desc or "varias fotos",
+                album_desc or "sin descripción",
                 kind="album",
+                read=bool(album_desc),
             )
             chat_reply = None
             if grok_chat.is_enabled():
                 if album_desc:
-                    prompt = (
-                        f"Acabo de enviarle un álbum de fotos al usuario donde se ve: {album_desc}. "
-                        "Reaccioná brevemente en personaje, como una chica hot mandándole contenido a su cliente/novio, "
-                        "y luego invitálo a pedir otra, todo en un solo mensaje coqueto y sugestivo."
-                    )
+                    prompt = f"Le mandé un álbum: {album_desc}. Reaccioná en personaje y ofrecé otra."
                 else:
-                    prompt = (
-                        "Acabo de enviarle un álbum de fotos al usuario. "
-                        "Reaccioná brevemente en personaje, como una chica hot mandándole contenido a su cliente/novio, "
-                        "y luego invitálo a pedir otra, todo en un solo mensaje coqueto y sugestivo."
-                    )
+                    prompt = "Le mandé un álbum. Reaccioná en personaje y ofrecé otra."
                 chat_reply = grok_chat.chat(update.effective_user.id, model_key, prompt)
             if not chat_reply:
                 chat_reply = random.choice([
@@ -222,29 +219,31 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         is_video = mime.startswith("video/")
         description = None
         if not is_video:
-            description = vision.describe_images([(file_bytes, mime)], kind="foto")
-        media_desc = description or media["name"]
+            description = vision.describe_images(
+                [(file_bytes, mime)],
+                kind="foto",
+                cache_key=media["id"],
+            )
+        if description:
+            media_desc = description
+        elif is_video:
+            media_desc = media["name"][:40]
+        else:
+            media_desc = "sin descripción"
         grok_chat.note_media(
             update.effective_user.id,
             model_key,
             media_desc,
             kind="video" if is_video else "foto",
+            read=bool(description) if not is_video else False,
         )
         chat_reply = None
         if grok_chat.is_enabled():
             media_word = "un video" if is_video else "una foto"
             if description:
-                prompt = (
-                    f"Acabo de enviarle {media_word} al usuario donde se ve: {description}. "
-                    "Reaccioná brevemente en personaje, como una chica hot mandándole contenido a su cliente/novio, "
-                    "y luego invitálo a pedir otra, todo en un solo mensaje coqueto y sugestivo."
-                )
+                prompt = f"Le mandé {media_word}: {description}. Reaccioná en personaje y ofrecé otra."
             else:
-                prompt = (
-                    f"Acabo de enviarle {media_word} al usuario. "
-                    "Reaccioná brevemente en personaje, como una chica hot mandándole contenido a su cliente/novio, "
-                    "y luego invitálo a pedir otra, todo en un solo mensaje coqueto y sugestivo."
-                )
+                prompt = f"Le mandé {media_word}. Reaccioná en personaje y ofrecé otra."
             chat_reply = grok_chat.chat(update.effective_user.id, model_key, prompt)
         if not chat_reply:
             chat_reply = random.choice([
