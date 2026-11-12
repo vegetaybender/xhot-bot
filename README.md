@@ -23,6 +23,16 @@ Envía fotos/videos aleatorios desde las carpetas de Google Drive.
 Todas las modelos hablan en español rioplatense con voseo. El nivel por defecto es `alto`
 (si `CHAT_EXPLICIT_LEVEL` está definido en Railway, ese valor tiene prioridad).
 
+## Modos
+
+- `/modo archivos` → solo fotos/videos, sin IA (como era al principio).
+- `/modo rol` → chat con rol, pero sin interpretar las fotos.
+- `/modo rol_fotos` → chat con rol + interpreta las fotos (default).
+
+También se puede cambiar desde el botón **⚙️ Modo** del menú.
+El modo por defecto es `rol_fotos`; si querés que arranque en solo archivos,
+definí `CHAT_MODE=archivos` en Railway.
+
 ## Deploy en Railway
 
 1. Crear un nuevo proyecto en Railway.app → "Deploy from GitHub" o subir esta carpeta.
@@ -45,5 +55,7 @@ Sin `WEBHOOK_URL`, el bot corre en modo polling (útil para pruebas locales).
 ## Estructura
 
 - `main.py` → lógica del bot y handlers
+- `chat_ai.py` → roleplay, roles, niveles, modos e historial
+- `vision.py` → descripción de fotos con Gemini
 - `drive_service.py` → integración con Google Drive
 - `config.py` → configuración y modelos

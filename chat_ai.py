@@ -174,9 +174,49 @@ DEFAULT_LEVEL = os.getenv("CHAT_EXPLICIT_LEVEL", "alto").strip().lower()
 if DEFAULT_LEVEL not in EXPLICIT_LEVELS:
     DEFAULT_LEVEL = "alto"
 
+MODES = {
+    "archivos": "Solo archivos (sin rol)",
+    "rol": "Rol (sin interpretar fotos)",
+    "rol_fotos": "Rol + interpretación de fotos",
+}
+
+MODE_ALIASES = {
+    "archivos": "archivos", "archivo": "archivos", "solo": "archivos",
+    "sinrol": "archivos", "sin_rol": "archivos", "files": "archivos", "0": "archivos",
+    "rol": "rol", "roleplay": "rol", "1": "rol",
+    "rol_fotos": "rol_fotos", "rolfotos": "rol_fotos", "fotos": "rol_fotos",
+    "rol+fotos": "rol_fotos", "interpretar": "rol_fotos", "2": "rol_fotos",
+}
+
+DEFAULT_MODE = os.getenv("CHAT_MODE", "rol_fotos").strip().lower()
+if DEFAULT_MODE not in MODES:
+    DEFAULT_MODE = "rol_fotos"
+
 _roles = {}
 _custom_personas = {}
 _levels = {}
+_modes = {}
+
+
+def mode_names():
+    return list(MODES.keys())
+
+
+def mode_label(key):
+    return MODES.get(key, key)
+
+
+def get_mode(user_id):
+    return _modes.get(user_id, DEFAULT_MODE)
+
+
+def set_mode(user_id, mode):
+    key = MODE_ALIASES.get((mode or "").strip().lower())
+    if not key:
+        return False
+    _modes[user_id] = key
+    reset(user_id)
+    return True
 
 
 def _key(user_id, model_key):

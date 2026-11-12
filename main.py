@@ -40,9 +40,22 @@ def model_menu_keyboard(model_key):
          InlineKeyboardButton("🖼 Álbum (3)", callback_data="action:album")],
         [InlineKeyboardButton("🎬 Video", callback_data="action:video"),
          InlineKeyboardButton("🎲 Sorpresa", callback_data="action:surprise")],
-        [InlineKeyboardButton("🔄 Cambiar modelo", callback_data="action:models"),
-         InlineKeyboardButton("🏠 Menú principal", callback_data="action:menu")],
+        [InlineKeyboardButton("⚙️ Modo", callback_data="action:modes"),
+         InlineKeyboardButton("🔄 Cambiar modelo", callback_data="action:models")],
+        [InlineKeyboardButton("🏠 Menú principal", callback_data="action:menu")],
     ]
+    return InlineKeyboardMarkup(buttons)
+
+
+def modes_keyboard(user_id):
+    current = grok_chat.get_mode(user_id)
+    buttons = []
+    for key in grok_chat.mode_names():
+        label = grok_chat.mode_label(key)
+        if key == current:
+            label = f"✅ {label}"
+        buttons.append([InlineKeyboardButton(label, callback_data=f"mode:{key}")])
+    buttons.append([InlineKeyboardButton("🔙 Volver", callback_data="action:back")])
     return InlineKeyboardMarkup(buttons)
 
 
@@ -53,7 +66,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
         "Hola 👋 Bienvenido/a a *Xhot* 🔥\n\n"
         "Elegí una modelo para chatear:\n\n"
-        "Después podés cambiar su rol con /rol (novia, amante, vip) y el nivel de explicitud con /nivel."
+        "Después podés cambiar su rol con /rol (novia, amante, vip), el nivel con /nivel "
+        "y el modo con /modo (archivos, rol, rol_fotos)."
     )
     if update.message:
         await update.message.reply_text(text, reply_markup=model_keyboard(), parse_mode="Markdown")
@@ -76,11 +90,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             grok_chat.reset(update.effective_user.id)
         name = MODELS[key]["name"]
         role = grok_chat.get_role(update.effective_user.id, key) if update.effective_user else "novia"
-        level = grok_chat.get_level(update.effective_user.id) if update.effective_user else "medio"
+        level = grok_chat.get_level(update.effective_user.id) if update.effective_user else "alto"
+        mode = grok_chat.get_mode(update.effective_user.id) if update.effective_user else "rol_fotos"
         await query.edit_message_text(
             f"Ahora estás chateando con *{name}* 💬\n"
             f"Rol: *{role}* · Nivel: *{level}*\n"
-            "Cambiá el rol con /rol y el nivel con /nivel\n"
+            f"Modo: *{grok_chat.mode_label(mode)}*\n"
+            "Cambiá el rol con /rol, el nivel con /nivel y el modo con /modo\n"
             "Pedime una foto o un video 👇",
             reply_markup=model_menu_keyboard(key),
             parse_mode="Markdown",
@@ -95,6 +111,54 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "action:menu":
         await query.edit_message_text("Menú principal. Elegí una modelo:", reply_markup=model_keyboard())
         context.user_data.pop("model", None)
+        return
+
+    if data == "action:modes":
+        if not update.effective_user:
+            return
+        current = grok_chat.get_mode(update.effective_user.id)
+        await query.edit_message_text(
+            f"Modo actual: *{grok_chat.mode_label(current)}*\n\n"
+            "Elegí cómo querés que funcione el bot:",
+            reply_markup=modes_keyboard(update.effective_user.id),
+            parse_mode="Markdown",
+        )
+        return
+
+    if data.startswith("mode:"):
+        if not update.effective_user:
+            return
+        mode = data.split(":", 1)[1]
+        if not grok_chat.set_mode(update.effective_user.id, mode):
+            await query.edit_message_text("Modo inválido.")
+            return
+        model_key = context.user_data.get("model")
+        label = grok_chat.mode_label(grok_chat.get_mode(update.effective_user.id))
+        if model_key:
+            await query.edit_message_text(
+                f"Modo activado: *{label}*\n\n"
+                "Ya podés pedir fotos o escribirle a la modelo.",
+                reply_markup=model_menu_keyboard(model_key),
+                parse_mode="Markdown",
+            )
+        else:
+            await query.edit_message_text(
+                f"Modo activado: *{label}*\n\nElegí una modelo:",
+                reply_markup=model_keyboard(),
+                parse_mode="Markdown",
+            )
+        return
+
+    if data == "action:back":
+        model_key = context.user_data.get("model")
+        if model_key:
+            await query.edit_message_text(
+                f"Elegí una opción para *{MODELS[model_key]['name']}*:",
+                reply_markup=model_menu_keyboard(model_key),
+                parse_mode="Markdown",
+            )
+        else:
+            await query.edit_message_text("Elegí una modelo:", reply_markup=model_keyboard())
         return
 
     model_key = context.user_data.get("model")
@@ -134,21 +198,32 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.reply_text("No pude enviar el álbum 😕", reply_markup=model_menu_keyboard(model_key))
             return
         if update.effective_user:
-            album_desc = vision.describe_images(
-                album_images,
-                kind="album",
-                cache_key=tuple(img["id"] for img in images),
-            )
-            grok_chat.note_media(
-                update.effective_user.id,
-                model_key,
-                album_desc or "sin descripción",
-                kind="album",
-                read=bool(album_desc),
-            )
+            mode = grok_chat.get_mode(update.effective_user.id)
+            if mode == "archivos":
+                await query.message.reply_text(
+                    "¿Qué más querés ver? 👇",
+                    reply_markup=model_menu_keyboard(model_key),
+                )
+                return
+
+            album_desc = None
+            if mode == "rol_fotos":
+                album_desc = vision.describe_images(
+                    album_images,
+                    kind="album",
+                    cache_key=tuple(img["id"] for img in images),
+                )
+                grok_chat.note_media(
+                    update.effective_user.id,
+                    model_key,
+                    album_desc or "sin descripción",
+                    kind="album",
+                    read=bool(album_desc),
+                )
+
             chat_reply = None
             if grok_chat.is_enabled():
-                if album_desc:
+                if mode == "rol_fotos" and album_desc:
                     prompt = (
                         "Instrucción interna: el usuario acaba de recibir tu álbum de fotos. "
                         f"En las fotos se ve: {album_desc}. "
@@ -166,6 +241,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if not chat_reply:
                 chat_reply = grok_chat.fallback_reply(update.effective_user.id, model_key)
             await query.message.reply_text(chat_reply, reply_markup=model_menu_keyboard(model_key))
+        return
     kind = None
     if data == "action:photo":
         kind = "image"
@@ -222,31 +298,41 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if update.effective_user and media.get("name"):
+        mode = grok_chat.get_mode(update.effective_user.id)
+        if mode == "archivos":
+            await query.message.reply_text(
+                "¿Qué más querés ver? 👇",
+                reply_markup=model_menu_keyboard(model_key),
+            )
+            return
+
         is_video = mime.startswith("video/")
         description = None
-        if not is_video:
-            description = vision.describe_images(
-                [(file_bytes, mime)],
-                kind="foto",
-                cache_key=media["id"],
+        if mode == "rol_fotos":
+            if not is_video:
+                description = vision.describe_images(
+                    [(file_bytes, mime)],
+                    kind="foto",
+                    cache_key=media["id"],
+                )
+            if description:
+                media_desc = description
+            elif is_video:
+                media_desc = media["name"][:40]
+            else:
+                media_desc = "sin descripción"
+            grok_chat.note_media(
+                update.effective_user.id,
+                model_key,
+                media_desc,
+                kind="video" if is_video else "foto",
+                read=bool(description) if not is_video else False,
             )
-        if description:
-            media_desc = description
-        elif is_video:
-            media_desc = media["name"][:40]
-        else:
-            media_desc = "sin descripción"
-        grok_chat.note_media(
-            update.effective_user.id,
-            model_key,
-            media_desc,
-            kind="video" if is_video else "foto",
-            read=bool(description) if not is_video else False,
-        )
+
         chat_reply = None
         if grok_chat.is_enabled():
             media_word = "video" if is_video else "foto"
-            if description:
+            if mode == "rol_fotos" and description:
                 prompt = (
                     f"Instrucción interna: el usuario acaba de recibir tu {media_word}. "
                     f"En la foto se ve: {description}. "
@@ -264,6 +350,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not chat_reply:
             chat_reply = grok_chat.fallback_reply(update.effective_user.id, model_key)
         await query.message.reply_text(chat_reply, reply_markup=model_menu_keyboard(model_key))
+
 
 async def roles_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -410,9 +497,49 @@ async def level_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+async def mode_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if not user or not update.message:
+        return
+    args = context.args or []
+
+    if not args:
+        current = grok_chat.get_mode(user.id)
+        await update.message.reply_text(
+            f"Modo actual: *{grok_chat.mode_label(current)}*\n\n"
+            "• `archivos` → solo fotos/videos, sin rol\n"
+            "• `rol` → chat con rol, sin interpretar fotos\n"
+            "• `rol_fotos` → chat con rol + interpreta las fotos\n\n"
+            "Cambiar: `/modo archivos`, `/modo rol` o `/modo rol_fotos`",
+            reply_markup=modes_keyboard(user.id),
+            parse_mode="Markdown",
+        )
+        return
+
+    mode = args[0].lower()
+    if not grok_chat.set_mode(user.id, mode):
+        await update.message.reply_text("Modo inválido. Usá: archivos, rol o rol_fotos.")
+        return
+
+    await update.message.reply_text(
+        f"Listo, modo: *{grok_chat.mode_label(grok_chat.get_mode(user.id))}*. Reinicié los chats.",
+        parse_mode="Markdown",
+    )
+
+
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     model_key = context.user_data.get("model")
     if model_key:
+        mode = grok_chat.get_mode(update.effective_user.id) if update.effective_user else "archivos"
+        if mode == "archivos":
+            await update.message.reply_text(
+                "Modo *solo archivos* activo. Usá los botones para pedir fotos, álbumes o videos.\n"
+                "Para activar el rol: /modo rol o /modo rol_fotos",
+                reply_markup=model_menu_keyboard(model_key),
+                parse_mode="Markdown",
+            )
+            return
+
         text = update.message.text or ""
         reply = None
         if grok_chat.is_enabled() and update.effective_user:
@@ -442,6 +569,7 @@ def main():
     app.add_handler(CommandHandler(["rol", "perfil"], role_command))
     app.add_handler(CommandHandler("persona", persona_command))
     app.add_handler(CommandHandler("nivel", level_command))
+    app.add_handler(CommandHandler("modo", mode_command))
     app.add_handler(CommandHandler("reset", reset_command))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
