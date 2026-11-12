@@ -149,9 +149,19 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             chat_reply = None
             if grok_chat.is_enabled():
                 if album_desc:
-                    prompt = f"Le mandé un álbum: {album_desc}. Reaccioná en personaje y ofrecé otra."
+                    prompt = (
+                        "Instrucción interna: el usuario acaba de recibir tu álbum de fotos. "
+                        f"En las fotos se ve: {album_desc}. "
+                        "Escribí tu próximo mensaje como la modelo que lo mandó, en 1-2 frases, "
+                        "mencionando al menos un detalle concreto y ofreciendo mandar otra. "
+                        "No repitas la lista tal cual."
+                    )
                 else:
-                    prompt = "Le mandé un álbum. Reaccioná en personaje y ofrecé otra."
+                    prompt = (
+                        "Instrucción interna: el usuario acaba de recibir tu álbum de fotos. "
+                        "Escribí tu próximo mensaje como la modelo que lo mandó, en 1-2 frases, "
+                        "y ofrecé mandar otra."
+                    )
                 chat_reply = grok_chat.chat(update.effective_user.id, model_key, prompt)
             if not chat_reply:
                 chat_reply = random.choice([
@@ -239,11 +249,21 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         chat_reply = None
         if grok_chat.is_enabled():
-            media_word = "un video" if is_video else "una foto"
+            media_word = "video" if is_video else "foto"
             if description:
-                prompt = f"Le mandé {media_word}: {description}. Reaccioná en personaje y ofrecé otra."
+                prompt = (
+                    f"Instrucción interna: el usuario acaba de recibir tu {media_word}. "
+                    f"En la foto se ve: {description}. "
+                    "Escribí tu próximo mensaje como la modelo que la mandó, en 1-2 frases, "
+                    "mencionando al menos un detalle concreto y ofreciendo mandar otra. "
+                    "No repitas la lista tal cual."
+                )
             else:
-                prompt = f"Le mandé {media_word}. Reaccioná en personaje y ofrecé otra."
+                prompt = (
+                    f"Instrucción interna: el usuario acaba de recibir tu {media_word}. "
+                    "Escribí tu próximo mensaje como la modelo que la mandó, en 1-2 frases, "
+                    "y ofrecé mandar otra."
+                )
             chat_reply = grok_chat.chat(update.effective_user.id, model_key, prompt)
         if not chat_reply:
             chat_reply = random.choice([

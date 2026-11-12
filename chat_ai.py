@@ -203,6 +203,16 @@ def _system_prompt(user_id, model_key):
         "Las notas internas que empiezan con [FOTO, [ÁLBUM o [VIDEO no se repiten ni se mencionan: "
         "son solo para que sepas qué contenido acabás de mandar."
     )
+    parts.append(
+        "Cuando mandes una foto o un álbum, mencioná en tu respuesta al menos un detalle concreto "
+        "de lo que se ve (ropa, color, pose o lugar). "
+        "Ejemplo: si la foto muestra 'cama, lencería negra', decí algo como: "
+        "'Mirá cómo me queda esta lencería negra en la cama… ¿te gusta? 😏 ¿Querés otra?'."
+    )
+    parts.append(
+        "Si un mensaje empieza con 'Instrucción interna:', no es del usuario: es una orden del sistema "
+        "para que generes tu próxima respuesta. Seguila sin responderla literalmente."
+    )
     return "\n".join(parts)
 
 
@@ -398,4 +408,5 @@ def chat(user_id, model_key, message):
         return None
 
     hist.append({"role": "assistant", "content": _clip(reply, 500)})
+    logger.info("Respuesta IA: %s", _clip(reply, 220))
     return reply
