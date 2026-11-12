@@ -164,11 +164,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     )
                 chat_reply = grok_chat.chat(update.effective_user.id, model_key, prompt)
             if not chat_reply:
-                chat_reply = random.choice([
-                    "¿Te gustó el álbum? 😏 ¿Querés que te muestre otra cosita? 😉",
-                    "Mmm... ¿qué te parece? 😉 ¿Te animás a pedirme otra? 😘",
-                    "Espero que te haya gustado 🔥 ¿Querés ver más de mí? 🔥",
-                ])
+                chat_reply = grok_chat.fallback_reply(update.effective_user.id, model_key)
             await query.message.reply_text(chat_reply, reply_markup=model_menu_keyboard(model_key))
     kind = None
     if data == "action:photo":
@@ -266,11 +262,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
             chat_reply = grok_chat.chat(update.effective_user.id, model_key, prompt)
         if not chat_reply:
-            chat_reply = random.choice([
-                "¿Te gustó? 😏 ¿Querés que te muestre otra cosita? 😉",
-                "Mmm... ¿qué te parece? 😉 ¿Te animás a pedirme otra? 😘",
-                "Espero que te haya gustado 🔥 ¿Querés ver más de mí? 🔥",
-            ])
+            chat_reply = grok_chat.fallback_reply(update.effective_user.id, model_key)
         await query.message.reply_text(chat_reply, reply_markup=model_menu_keyboard(model_key))
 
 async def roles_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -401,15 +393,15 @@ async def level_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Nivel actual: *{current}*\n\n"
             "• `suave` → coqueta y sugerente, sin lenguaje explícito\n"
             "• `medio` → caliente y directa, sin descripciones gráficas\n"
-            "• `alto` → roleplay adulto explícito\n\n"
-            "Cambiar: `/nivel alto`",
+            "• `alto` → roleplay adulto explícito y sin filtros (alias: extremo)\n\n"
+            "Cambiar: `/nivel alto` o `/nivel extremo`",
             parse_mode="Markdown",
         )
         return
 
     level = args[0].lower()
     if not grok_chat.set_level(user.id, level):
-        await update.message.reply_text("Nivel inválido. Usá: suave, medio o alto.")
+        await update.message.reply_text("Nivel inválido. Usá: suave, medio, alto o extremo.")
         return
 
     await update.message.reply_text(
@@ -421,13 +413,15 @@ async def level_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     model_key = context.user_data.get("model")
     if model_key:
-        name = MODELS[model_key]["name"]
         text = update.message.text or ""
         reply = None
         if grok_chat.is_enabled() and update.effective_user:
             reply = grok_chat.chat(update.effective_user.id, model_key, text)
         if not reply:
-            reply = f"{name}: {random.choice(FREE_TEXT_REPLIES)}"
+            if update.effective_user:
+                reply = grok_chat.fallback_reply(update.effective_user.id, model_key)
+            else:
+                reply = random.choice(FREE_TEXT_REPLIES)
         await update.message.reply_text(reply, reply_markup=model_menu_keyboard(model_key))
     else:
         await update.message.reply_text("Usá /start para elegir una modelo 👇", reply_markup=model_keyboard())
