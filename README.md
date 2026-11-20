@@ -28,10 +28,34 @@ Todas las modelos hablan en español rioplatense con voseo. El nivel por defecto
 - `/modo archivos` → solo fotos/videos, sin IA (como era al principio).
 - `/modo rol` → chat con rol, pero sin interpretar las fotos.
 - `/modo rol_fotos` → chat con rol + interpreta las fotos (default).
+- `/modo vida` (o `/vida`) → **vida propia**: el bot te manda mensajes automáticos.
 
 También se puede cambiar desde el botón **⚙️ Modo** del menú.
 El modo por defecto es `rol_fotos`; si querés que arranque en solo archivos,
 definí `CHAT_MODE=archivos` en Railway.
+
+### Vida propia (`/vida`)
+
+Cuando activás este modo, cada cierto tiempo el bot toma la iniciativa:
+
+1. Elige una modelo al azar entre Yus López, Angie Watters y Valen Borelli.
+2. Busca una foto suya en Drive y te la manda **sin caption**.
+3. La lee con visión (Gemini) y describe lo que se ve.
+4. Te manda un mensaje aparte, en personaje y con el **rol ya seteado de esa modelo**
+   (novia / amante / vip), invitándote a chatear, con los botones del menú.
+
+Si la visión no está configurada o falla, igual se manda la foto y el mensaje de invitación.
+Para apagarlo: `/vida off` o `/modo rol_fotos`.
+
+Intervalos configurables en Railway:
+
+- `VIDA_INTERVAL_MINUTES` → minutos entre mensajes automáticos (default `30`).
+- `VIDA_FIRST_MINUTES` → minutos hasta el primer mensaje (default `2`).
+
+El registro de chats (y los modos, roles y niveles) vive en memoria: después de un
+redeploy hay que volver a activarlo con `/vida` (o `/modo vida`). Si el proceso se
+reinicia sin redeploy, se re-registra automáticamente cuando el usuario escribe o
+usa `/start`.
 
 ## Deploy en Railway
 

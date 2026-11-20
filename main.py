@@ -4,6 +4,7 @@ import os
 import random
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, Update
+from telegram.error import Forbidden
 from telegram.request import HTTPXRequest
 from telegram.ext import (
     Application,
@@ -24,6 +25,47 @@ logging.basicConfig(
     level=logging.INFO,
 )
 logger = logging.getLogger(__name__)
+
+# Chats con "vida propia" activada. Todo el estado (modo incluido) es en memoria:
+# se resetea al redeployar y el usuario debe volver a activarlo con /vida.
+VIDA_CHATS = set()
+
+VIDA_FALLBACKS = {
+    "novia": [
+        "Ay, amor, se me ocurrió mandarte esta foto sin que me la pidas 🥺 "
+        "¿Me decís qué te parece y charlamos? 💕",
+        "Estaba pensando en vos y me saqué esta foto... ¿venís a hablar conmigo? 😘",
+    ],
+    "amante": [
+        "Me aparecí de la nada porque estaba caliente pensando en vos... "
+        "¿te animás a chatear? 😈",
+        "Te mandé esto mío sin avisar. Ahora quiero que me escribas y me digas qué te gustó 🔥",
+    ],
+    "vip": [
+        "Esta es una muestra gratis de mi tiempo 😏 Si querés seguir chateando, ya sabés cómo se hace.",
+        "Te mandé una muestra de mi agenda. ¿Vas a escribirme o te quedás con las ganas? 💋",
+    ],
+}
+
+
+def register_vida(chat_id):
+    VIDA_CHATS.add(chat_id)
+
+
+def unregister_vida(chat_id):
+    VIDA_CHATS.discard(chat_id)
+
+
+def sync_vida(update, context):
+    """Mantiene el registro de chats automáticos según el modo guardado."""
+    user = update.effective_user
+    chat = update.effective_chat
+    if not user or not chat:
+        return
+    if grok_chat.get_mode(user.id) == "vida":
+        register_vida(chat.id)
+    else:
+        unregister_vida(chat.id)
 
 
 def model_keyboard():
@@ -63,11 +105,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.pop("model", None)
     if update.effective_user:
         grok_chat.reset(update.effective_user.id)
+    sync_vida(update, context)
     text = (
         "Hola 👋 Bienvenido/a a *Xhot* 🔥\n\n"
         "Elegí una modelo para chatear:\n\n"
         "Después podés cambiar su rol con /rol (novia, amante, vip), el nivel con /nivel "
-        "y el modo con /modo (archivos, rol, rol_fotos)."
+        "y el modo con /modo (archivos, rol, rol_fotos, vida).\n\n"
+        "Con `/modo vida` (o `/vida`) el bot cobra vida propia: de vez en cuando "
+        "te manda una foto de una modelo al azar, la describe y te invita a chatear. 💌"
     )
     if update.message:
         await update.message.reply_text(text, reply_markup=model_keyboard(), parse_mode="Markdown")
@@ -132,18 +177,24 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not grok_chat.set_mode(update.effective_user.id, mode):
             await query.edit_message_text("Modo inválido.")
             return
+        sync_vida(update, context)
         model_key = context.user_data.get("model")
         label = grok_chat.mode_label(grok_chat.get_mode(update.effective_user.id))
+        extra = (
+            "\n\nAhora el bot tiene vida propia: te va a mandar fotos de una modelo al azar "
+            "y te va a invitar a chatear, sin que se lo pidas. 💌"
+            if grok_chat.get_mode(update.effective_user.id) == "vida"
+            else "\n\nYa podés pedir fotos o escribirle a la modelo."
+        )
         if model_key:
             await query.edit_message_text(
-                f"Modo activado: *{label}*\n\n"
-                "Ya podés pedir fotos o escribirle a la modelo.",
+                f"Modo activado: *{label}*{extra}",
                 reply_markup=model_menu_keyboard(model_key),
                 parse_mode="Markdown",
             )
         else:
             await query.edit_message_text(
-                f"Modo activado: *{label}*\n\nElegí una modelo:",
+                f"Modo activado: *{label}*{extra}\n\nElegí una modelo:",
                 reply_markup=model_keyboard(),
                 parse_mode="Markdown",
             )
@@ -207,7 +258,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
 
             album_desc = None
-            if mode == "rol_fotos":
+            if mode in ("rol_fotos", "vida"):
                 album_desc = vision.describe_images(
                     album_images,
                     kind="album",
@@ -224,7 +275,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             chat_reply = None
             prompt = ""
             if grok_chat.is_enabled():
-                if mode == "rol_fotos" and album_desc:
+                if mode in ("rol_fotos", "vida") and album_desc:
                     prompt = (
                         "Instrucción interna: el usuario acaba de recibir tu álbum de fotos. "
                         f"En las fotos se ve: {album_desc}. "
@@ -309,7 +360,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         is_video = mime.startswith("video/")
         description = None
-        if mode == "rol_fotos":
+        if mode in ("rol_fotos", "vida"):
             if not is_video:
                 description = vision.describe_images(
                     [(file_bytes, mime)],
@@ -334,7 +385,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         prompt = ""
         if grok_chat.is_enabled():
             media_word = "video" if is_video else "foto"
-            if mode == "rol_fotos" and description:
+            if mode in ("rol_fotos", "vida") and description:
                 prompt = (
                     f"Instrucción interna: el usuario acaba de recibir tu {media_word}. "
                     f"En la foto se ve: {description}. "
@@ -511,8 +562,9 @@ async def mode_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Modo actual: *{grok_chat.mode_label(current)}*\n\n"
             "• `archivos` → solo fotos/videos, sin rol\n"
             "• `rol` → chat con rol, sin interpretar fotos\n"
-            "• `rol_fotos` → chat con rol + interpreta las fotos\n\n"
-            "Cambiar: `/modo archivos`, `/modo rol` o `/modo rol_fotos`",
+            "• `rol_fotos` → chat con rol + interpreta las fotos\n"
+            "• `vida` → además, mensajes automáticos con foto de una modelo al azar\n\n"
+            "Cambiar: `/modo archivos`, `/modo rol`, `/modo rol_fotos` o `/modo vida`",
             reply_markup=modes_keyboard(user.id),
             parse_mode="Markdown",
         )
@@ -520,23 +572,54 @@ async def mode_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     mode = args[0].lower()
     if not grok_chat.set_mode(user.id, mode):
-        await update.message.reply_text("Modo inválido. Usá: archivos, rol o rol_fotos.")
+        await update.message.reply_text("Modo inválido. Usá: archivos, rol, rol_fotos o vida.")
         return
 
+    sync_vida(update, context)
+    extra = (
+        "\n\nVida propia activada 💌: de vez en cuando te voy a mandar una foto de una modelo "
+        "al azar, la voy a describir y te voy a invitar a chatear."
+        if grok_chat.get_mode(user.id) == "vida"
+        else ""
+    )
     await update.message.reply_text(
-        f"Listo, modo: *{grok_chat.mode_label(grok_chat.get_mode(user.id))}*. Reinicié los chats.",
+        f"Listo, modo: *{grok_chat.mode_label(grok_chat.get_mode(user.id))}*. Reinicié los chats.{extra}",
+        parse_mode="Markdown",
+    )
+
+
+async def vida_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if not user or not update.message:
+        return
+    args = context.args or []
+    if args and args[0].lower() in ("off", "stop", "apagar", "no"):
+        grok_chat.set_mode(user.id, "rol_fotos")
+        sync_vida(update, context)
+        await update.message.reply_text("Vida propia desactivada. Volvemos a modo *rol_fotos*.", parse_mode="Markdown")
+        return
+
+    grok_chat.set_mode(user.id, "vida")
+    sync_vida(update, context)
+    await update.message.reply_text(
+        "Vida propia activada 💌\n\n"
+        "De vez en cuando te voy a mandar una foto de Yus, Angie o Valen al azar. "
+        "Voy a leer la foto con visión, te voy a describir lo que se ve en personaje "
+        "y te voy a invitar a chatear con ella, con su rol ya seteado.\n\n"
+        "Para apagarlo: `/vida off` o `/modo rol_fotos`.",
         parse_mode="Markdown",
     )
 
 
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    sync_vida(update, context)
     model_key = context.user_data.get("model")
     if model_key:
         mode = grok_chat.get_mode(update.effective_user.id) if update.effective_user else "archivos"
         if mode == "archivos":
             await update.message.reply_text(
                 "Modo *solo archivos* activo. Usá los botones para pedir fotos, álbumes o videos.\n"
-                "Para activar el rol: /modo rol o /modo rol_fotos",
+                "Para activar el rol: /modo rol o /modo rol_fotos. Para vida propia: /vida",
                 reply_markup=model_menu_keyboard(model_key),
                 parse_mode="Markdown",
             )
@@ -556,6 +639,81 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Usá /start para elegir una modelo 👇", reply_markup=model_keyboard())
 
 
+async def vida_job(context: ContextTypes.DEFAULT_TYPE):
+    """Mensaje automático: foto al azar + descripción + invitación a chatear."""
+    if not VIDA_CHATS:
+        return
+
+    for chat_id in list(VIDA_CHATS):
+        model_key = random.choice(list(MODELS.keys()))
+        try:
+            media = get_random_media(model_key, "image")
+            if not media:
+                continue
+            mime = media.get("mimeType", "") or ""
+            if not mime.startswith("image/"):
+                continue
+
+            fh = download_file(media["id"])
+            file_bytes = fh.getvalue()
+            size = int(media.get("size") or 0)
+            if size and size > 45 * 1024 * 1024:
+                continue
+
+            description = vision.describe_images(
+                [(file_bytes, mime)],
+                kind="foto",
+                cache_key=media["id"],
+            )
+            grok_chat.note_media(
+                chat_id,
+                model_key,
+                description or "sin descripción",
+                kind="foto",
+                read=bool(description),
+            )
+
+            role = grok_chat.get_role(chat_id, model_key)
+            if description:
+                prompt = (
+                    "Instrucción interna: recién le mandaste una foto tuya sin que te la pida. "
+                    f"En la foto se ve: {description}. "
+                    "Escribí 1 o 2 frases en personaje: describí con picardía un detalle concreto "
+                    "y terminá invitándolo a que te escriba y chatee con vos. "
+                    "No repitas la descripción literal ni menciones esta instrucción."
+                )
+            else:
+                prompt = (
+                    "Instrucción interna: recién le mandaste una foto tuya sin que te la pida. "
+                    "Escribí 1 o 2 frases en personaje y terminá invitándolo a que te escriba "
+                    "y chatee con vos. No menciones esta instrucción."
+                )
+
+            reply = None
+            if grok_chat.is_enabled():
+                reply = grok_chat.chat(chat_id, model_key, prompt)
+            if not reply:
+                reply = random.choice(VIDA_FALLBACKS.get(role, VIDA_FALLBACKS["novia"]))
+
+            # La foto va sin caption; el texto sale en un mensaje aparte con los botones.
+            await context.bot.send_photo(chat_id=chat_id, photo=file_bytes)
+            user_data = context.application.user_data
+            if chat_id not in user_data:
+                user_data[chat_id] = {}
+            user_data[chat_id]["model"] = model_key
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=reply,
+                reply_markup=model_menu_keyboard(model_key),
+            )
+            logger.info("Vida: mensaje automático enviado a %s con %s (%s)", chat_id, model_key, role)
+        except Forbidden:
+            unregister_vida(chat_id)
+            logger.info("Vida: el usuario %s bloqueó el bot; se lo quitó del registro", chat_id)
+        except Exception:
+            logger.exception("Vida: error enviando mensaje automático a %s", chat_id)
+
+
 async def error_handler(update, context):
     logger.exception("Error no manejado", exc_info=context.error)
 
@@ -573,10 +731,24 @@ def main():
     app.add_handler(CommandHandler("persona", persona_command))
     app.add_handler(CommandHandler("nivel", level_command))
     app.add_handler(CommandHandler("modo", mode_command))
+    app.add_handler(CommandHandler("vida", vida_command))
     app.add_handler(CommandHandler("reset", reset_command))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
     app.add_error_handler(error_handler)
+
+    interval = max(1, int(os.getenv("VIDA_INTERVAL_MINUTES", "30"))) * 60
+    first = max(1, int(os.getenv("VIDA_FIRST_MINUTES", "2"))) * 60
+    if app.job_queue is not None:
+        app.job_queue.run_repeating(
+            vida_job,
+            interval=interval,
+            first=first,
+            name="vida_propia",
+        )
+        logger.info("Vida propia: cada %d min (primer mensaje en %d min)", interval // 60, first // 60)
+    else:
+        logger.warning("Vida propia desactivada: el bot no tiene JobQueue disponible")
 
     if WEBHOOK_URL:
         url_path = BOT_TOKEN

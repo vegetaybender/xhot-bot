@@ -178,6 +178,7 @@ MODES = {
     "archivos": "Solo archivos (sin rol)",
     "rol": "Rol (sin interpretar fotos)",
     "rol_fotos": "Rol + interpretación de fotos",
+    "vida": "Vida propia (mensajes automáticos)",
 }
 
 MODE_ALIASES = {
@@ -186,6 +187,8 @@ MODE_ALIASES = {
     "rol": "rol", "roleplay": "rol", "1": "rol",
     "rol_fotos": "rol_fotos", "rolfotos": "rol_fotos", "fotos": "rol_fotos",
     "rol+fotos": "rol_fotos", "interpretar": "rol_fotos", "2": "rol_fotos",
+    "vida": "vida", "auto": "vida", "automatico": "vida", "automático": "vida",
+    "proactivo": "vida", "vida_propia": "vida", "3": "vida",
 }
 
 DEFAULT_MODE = os.getenv("CHAT_MODE", "rol_fotos").strip().lower()
