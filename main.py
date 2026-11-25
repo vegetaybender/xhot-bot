@@ -4,7 +4,7 @@ import os
 import random
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, Update
-from telegram.error import Forbidden
+from telegram.error import BadRequest, Forbidden, TelegramError
 from telegram.request import HTTPXRequest
 from telegram.ext import (
     Application,
@@ -66,6 +66,42 @@ def sync_vida(update, context):
         register_vida(chat.id)
     else:
         unregister_vida(chat.id)
+
+
+# --- Reenvío desde un grupo a contacto y/o canal ---------------------------
+def _parse_ids(raw):
+    ids = []
+    for part in (raw or "").replace(";", ",").split(","):
+        part = part.strip()
+        if part.lstrip("-").isdigit():
+            ids.append(int(part))
+    return ids
+
+
+def _forward_group_id():
+    ids = _parse_ids(os.getenv("FORWARD_GROUP_ID", ""))
+    return ids[0] if ids else None
+
+
+def _forward_destinations():
+    ids = _parse_ids(os.getenv("FORWARD_DEST_IDS", ""))
+    ids += _parse_ids(os.getenv("FORWARD_CONTACT_ID", ""))
+    ids += _parse_ids(os.getenv("FORWARD_CHANNEL_ID", ""))
+    seen = set()
+    return [i for i in ids if not (i in seen or seen.add(i))]
+
+
+def _forward_mode():
+    mode = os.getenv("FORWARD_MODE", "forward").strip().lower()
+    return mode if mode in ("forward", "copy") else "forward"
+
+
+try:
+    _NO_STATUS_UPDATES = ~filters.StatusUpdate.ALL
+except AttributeError:
+    _NO_STATUS_UPDATES = filters.ALL
+
+FORWARD_FILTER = filters.ChatType.GROUPS & ~filters.COMMAND & _NO_STATUS_UPDATES
 
 
 def model_keyboard():
@@ -639,6 +675,76 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Usá /start para elegir una modelo 👇", reply_markup=model_keyboard())
 
 
+async def chatid_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat = update.effective_chat
+    message = update.message
+    user = update.effective_user
+    if not chat or not message:
+        return
+    lines = [
+        "*IDs de este chat*",
+        f"• Chat ID: `{chat.id}`",
+        f"• Tipo: `{chat.type}`",
+    ]
+    thread_id = getattr(message, "message_thread_id", None)
+    if thread_id:
+        lines.append(f"• Topic/hilo ID: `{thread_id}`")
+    if user:
+        lines.append(f"• Tu user ID: `{user.id}`")
+    lines += [
+        "",
+        "Copiá en Railway según corresponda:",
+        f"• Grupo origen → `FORWARD_GROUP_ID={chat.id}`",
+        f"• Contacto destino → `FORWARD_CONTACT_ID={user.id if user else chat.id}`",
+        f"• Canal destino → `FORWARD_CHANNEL_ID={chat.id}`",
+    ]
+    await message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+
+async def ignore_group_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """En grupos el bot solo reenvía: ignora comandos que no sean /chatid."""
+    return
+
+
+async def forward_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    message = update.message
+    chat = update.effective_chat
+    if not message or not chat:
+        return
+
+    sender = message.from_user
+    if sender and sender.is_bot:
+        return
+
+    group_id = _forward_group_id()
+    if group_id is not None and chat.id != group_id:
+        return
+
+    destinations = _forward_destinations()
+    if not destinations:
+        return
+
+    mode = _forward_mode()
+    for dest in destinations:
+        try:
+            if mode == "copy":
+                await context.bot.copy_message(
+                    chat_id=dest,
+                    from_chat_id=chat.id,
+                    message_id=message.message_id,
+                )
+            else:
+                await context.bot.forward_message(
+                    chat_id=dest,
+                    from_chat_id=chat.id,
+                    message_id=message.message_id,
+                )
+        except Forbidden:
+            logger.warning("Reenvío a %s: el bot no tiene permiso para escribir", dest)
+        except (BadRequest, TelegramError) as e:
+            logger.warning("No pude reenviar el mensaje a %s: %s", dest, e)
+
+
 async def vida_job(context: ContextTypes.DEFAULT_TYPE):
     """Mensaje automático: foto al azar + descripción + invitación a chatear."""
     if not VIDA_CHATS:
@@ -725,6 +831,12 @@ def main():
     logger.info("Xhot Bot - modos disponibles: %s", ", ".join(grok_chat.mode_names()))
     request = HTTPXRequest(connect_timeout=20, read_timeout=120, write_timeout=120, pool_timeout=20)
     app = Application.builder().token(BOT_TOKEN).request(request).build()
+    # En grupos el bot solo reenvía; /chatid es la única excepción.
+    app.add_handler(MessageHandler(
+        filters.ChatType.GROUPS & filters.COMMAND & ~filters.Command("chatid"),
+        ignore_group_command,
+    ))
+    app.add_handler(CommandHandler("chatid", chatid_command))
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("roles", roles_command))
     app.add_handler(CommandHandler(["rol", "perfil"], role_command))
@@ -734,6 +846,7 @@ def main():
     app.add_handler(CommandHandler("vida", vida_command))
     app.add_handler(CommandHandler("reset", reset_command))
     app.add_handler(CallbackQueryHandler(button_handler))
+    app.add_handler(MessageHandler(FORWARD_FILTER, forward_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
     app.add_error_handler(error_handler)
 

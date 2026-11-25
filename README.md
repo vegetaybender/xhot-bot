@@ -57,6 +57,35 @@ redeploy hay que volver a activarlo con `/vida` (o `/modo vida`). Si el proceso 
 reinicia sin redeploy, se re-registra automáticamente cuando el usuario escribe o
 usa `/start`.
 
+## Reenvío desde un grupo a un contacto y/o un canal
+
+El bot puede reenviar **todo tipo de mensaje** (texto, fotos, videos, audios, documentos,
+álbumes) desde un grupo que ya tenés hacia un contacto y un canal a la vez. En el grupo
+queda **silencioso**: no responde con roleplay ni con comandos (salvo `/chatid`).
+
+Configuración paso a paso:
+
+1. En BotFather hacé `/setprivacy` → elegí el bot → **Disable**. Si no, Telegram solo le
+   entrega al bot los comandos y las respuestas dirigidas a él, no el resto del grupo.
+2. Agregá al bot al grupo de origen.
+3. Si va a publicar en un canal, agregalo como **administrador** con permiso de publicar.
+4. Escribí `/chatid` en el grupo y en el chat del contacto, y copiá los IDs. Para el canal,
+   reenviá un mensaje suyo a un bot tipo `@get_id_bot` (o mirá el ID en la URL de Telegram Web).
+5. Cargá en Railway:
+
+   - `FORWARD_GROUP_ID` → ID del grupo de origen (si lo dejás vacío, reenvía desde cualquier grupo).
+   - `FORWARD_CONTACT_ID` → ID del contacto destino.
+   - `FORWARD_CHANNEL_ID` → ID del canal destino.
+   - `FORWARD_DEST_IDS` → alternativa: ambos IDs en una sola lista separada por coma.
+   - `FORWARD_MODE` → `forward` (default, conserva el encabezado "Reenviado desde…") o `copy`
+     (publica una copia limpia, sin el encabezado).
+
+6. Redeploy para que tome las variables.
+
+Notas: los álbumes se reenvían foto por foto (Telegram no permite reenviar el grupo completo
+como una sola unidad). Los mensajes de servicio (nuevos miembros, cambios de título, etc.)
+se ignoran. Si el bot es el autor del mensaje, también se ignora para evitar bucles.
+
 ## Deploy en Railway
 
 1. Crear un nuevo proyecto en Railway.app → "Deploy from GitHub" o subir esta carpeta.
