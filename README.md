@@ -52,6 +52,10 @@ Intervalos configurables en Railway:
 - `VIDA_INTERVAL_MINUTES` → minutos entre mensajes automáticos (default `30`).
 - `VIDA_FIRST_MINUTES` → minutos hasta el primer mensaje (default `2`).
 
+Para que los mensajes automáticos funcionen, `requirements.txt` instala
+`python-telegram-bot[job-queue]` (sin ese extra el bot arranca pero avisa
+`No JobQueue set up` y el modo `vida` queda inactivo).
+
 El registro de chats (y los modos, roles y niveles) vive en memoria: después de un
 redeploy hay que volver a activarlo con `/vida` (o `/modo vida`). Si el proceso se
 reinicia sin redeploy, se re-registra automáticamente cuando el usuario escribe o
@@ -61,7 +65,7 @@ usa `/start`.
 
 El bot puede reenviar **todo tipo de mensaje** (texto, fotos, videos, audios, documentos,
 álbumes) desde un grupo que ya tenés hacia un contacto y un canal a la vez. En el grupo
-queda **silencioso**: no responde con roleplay ni con comandos (salvo `/chatid`).
+queda **silencioso**: no responde con roleplay ni con comandos (salvo `/chatid` y `/settopic`).
 
 Configuración paso a paso:
 
@@ -80,7 +84,17 @@ Configuración paso a paso:
    - `FORWARD_MODE` → `forward` (default, conserva el encabezado "Reenviado desde…") o `copy`
      (publica una copia limpia, sin el encabezado).
 
-6. Redeploy para que tome las variables.
+6. **Elegir topics (opcional)**: entrá al topic del grupo desde el que querés reenviar y escribí:
+
+   - `/settopic` → solo se reenvían los mensajes de ese topic y se publican en el topic del
+     mismo número en el destino.
+   - `/settopic 123` → origen = el topic actual, destino = topic `123`.
+   - `/settopic off` → volver a reenviar todo el grupo, sin filtrar.
+
+   También podés fijarlos con `FORWARD_THREAD_ID` (origen) y `FORWARD_DEST_THREAD_ID` (destino).
+   Si el destino es un canal (no tiene topics), el bot reintenta automáticamente sin topic.
+
+7. Redeploy para que tome las variables.
 
 Notas: los álbumes se reenvían foto por foto (Telegram no permite reenviar el grupo completo
 como una sola unidad). Los mensajes de servicio (nuevos miembros, cambios de título, etc.)

@@ -26,6 +26,22 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
+def md(text):
+    """Escapa los _ fuera de `código`: Telegram los toma como entidades."""
+    out = []
+    in_code = False
+    for ch in (text or ""):
+        if ch == "`":
+            in_code = not in_code
+            out.append(ch)
+        elif ch == "_" and not in_code:
+            out.append("\\_")
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
 # Chats con "vida propia" activada. Todo el estado (modo incluido) es en memoria:
 # se resetea al redeployar y el usuario debe volver a activarlo con /vida.
 VIDA_CHATS = set()
@@ -96,6 +112,25 @@ def _forward_mode():
     return mode if mode in ("forward", "copy") else "forward"
 
 
+def _env_int(name):
+    ids = _parse_ids(os.getenv(name, ""))
+    return ids[0] if ids else None
+
+
+# topic elegido por grupo: {"source": thread_id | None, "dest": thread_id | None}
+FORWARD_TOPICS = {}
+
+
+def _source_thread(chat_id):
+    per_chat = FORWARD_TOPICS.get(chat_id, {}).get("source")
+    return per_chat if per_chat is not None else _env_int("FORWARD_THREAD_ID")
+
+
+def _dest_thread(chat_id):
+    per_chat = FORWARD_TOPICS.get(chat_id, {}).get("dest")
+    return per_chat if per_chat is not None else _env_int("FORWARD_DEST_THREAD_ID")
+
+
 try:
     _NO_STATUS_UPDATES = ~filters.StatusUpdate.ALL
 except AttributeError:
@@ -150,6 +185,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Con `/modo vida` (o `/vida`) el bot cobra vida propia: de vez en cuando "
         "te manda una foto de una modelo al azar, la describe y te invita a chatear. 💌"
     )
+    text = md(text)
     if update.message:
         await update.message.reply_text(text, reply_markup=model_keyboard(), parse_mode="Markdown")
     else:
@@ -595,12 +631,14 @@ async def mode_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not args:
         current = grok_chat.get_mode(user.id)
         await update.message.reply_text(
-            f"Modo actual: *{grok_chat.mode_label(current)}*\n\n"
-            "• `archivos` → solo fotos/videos, sin rol\n"
-            "• `rol` → chat con rol, sin interpretar fotos\n"
-            "• `rol_fotos` → chat con rol + interpreta las fotos\n"
-            "• `vida` → además, mensajes automáticos con foto de una modelo al azar\n\n"
-            "Cambiar: `/modo archivos`, `/modo rol`, `/modo rol_fotos` o `/modo vida`",
+            md(
+                f"Modo actual: *{grok_chat.mode_label(current)}*\n\n"
+                "• `archivos` → solo fotos/videos, sin rol\n"
+                "• `rol` → chat con rol, sin interpretar fotos\n"
+                "• `rol_fotos` → chat con rol + interpreta las fotos\n"
+                "• `vida` → además, mensajes automáticos con foto de una modelo al azar\n\n"
+                "Cambiar: `/modo archivos`, `/modo rol`, `/modo rol_fotos` o `/modo vida`"
+            ),
             reply_markup=modes_keyboard(user.id),
             parse_mode="Markdown",
         )
@@ -632,17 +670,19 @@ async def vida_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if args and args[0].lower() in ("off", "stop", "apagar", "no"):
         grok_chat.set_mode(user.id, "rol_fotos")
         sync_vida(update, context)
-        await update.message.reply_text("Vida propia desactivada. Volvemos a modo *rol_fotos*.", parse_mode="Markdown")
+        await update.message.reply_text(md("Vida propia desactivada. Volvemos a modo *rol_fotos*."), parse_mode="Markdown")
         return
 
     grok_chat.set_mode(user.id, "vida")
     sync_vida(update, context)
     await update.message.reply_text(
-        "Vida propia activada 💌\n\n"
-        "De vez en cuando te voy a mandar una foto de Yus, Angie o Valen al azar. "
-        "Voy a leer la foto con visión, te voy a describir lo que se ve en personaje "
-        "y te voy a invitar a chatear con ella, con su rol ya seteado.\n\n"
-        "Para apagarlo: `/vida off` o `/modo rol_fotos`.",
+        md(
+            "Vida propia activada 💌\n\n"
+            "De vez en cuando te voy a mandar una foto de Yus, Angie o Valen al azar. "
+            "Voy a leer la foto con visión, te voy a describir lo que se ve en personaje "
+            "y te voy a invitar a chatear con ella, con su rol ya seteado.\n\n"
+            "Para apagarlo: `/vida off` o `/modo rol_fotos`."
+        ),
         parse_mode="Markdown",
     )
 
@@ -654,8 +694,10 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         mode = grok_chat.get_mode(update.effective_user.id) if update.effective_user else "archivos"
         if mode == "archivos":
             await update.message.reply_text(
-                "Modo *solo archivos* activo. Usá los botones para pedir fotos, álbumes o videos.\n"
-                "Para activar el rol: /modo rol o /modo rol_fotos. Para vida propia: /vida",
+                md(
+                    "Modo *solo archivos* activo. Usá los botones para pedir fotos, álbumes o videos.\n"
+                    "Para activar el rol: /modo rol o /modo rol_fotos. Para vida propia: /vida"
+                ),
                 reply_markup=model_menu_keyboard(model_key),
                 parse_mode="Markdown",
             )
@@ -697,12 +739,63 @@ async def chatid_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"• Grupo origen → `FORWARD_GROUP_ID={chat.id}`",
         f"• Contacto destino → `FORWARD_CONTACT_ID={user.id if user else chat.id}`",
         f"• Canal destino → `FORWARD_CHANNEL_ID={chat.id}`",
+        "",
+        "Para elegir temas (topics):",
+        "• Escribí `/settopic` dentro del topic de origen.",
+        "• `/settopic 123` → ese topic de origen y el topic `123` como destino.",
+        "• `/settopic off` → volver a reenviar todo, sin filtrar por topic.",
     ]
-    await message.reply_text("\n".join(lines), parse_mode="Markdown")
+    await message.reply_text(md("\n".join(lines)), parse_mode="Markdown")
+
+
+async def settopic_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Elegí el topic de origen (donde llamás al bot) y el topic de destino."""
+    chat = update.effective_chat
+    message = update.message
+    if not chat or not message:
+        return
+
+    args = context.args or []
+    if args and args[0].lower() in ("off", "todo", "todos", "reset", "limpiar"):
+        FORWARD_TOPICS.pop(chat.id, None)
+        await message.reply_text(
+            md("Listo: reenvío sin filtro de topic otra vez."),
+            parse_mode="Markdown",
+        )
+        return
+
+    source = getattr(message, "message_thread_id", None)
+    if not source:
+        await message.reply_text(
+            md(
+                "Este comando tiene que escribirse *dentro de un topic* del grupo. "
+                "Ahí es donde el bot va a escuchar los mensajes."
+            ),
+            parse_mode="Markdown",
+        )
+        return
+
+    dest = None
+    if args:
+        ids = _parse_ids(args[0])
+        dest = ids[0] if ids else None
+
+    FORWARD_TOPICS[chat.id] = {"source": source, "dest": dest}
+    dest_text = f"`{dest}`" if dest is not None else "el mismo topic en el destino"
+    await message.reply_text(
+        md(
+            f"Listo ✅\n\n"
+            f"• Topic de origen: `{source}`\n"
+            f"• Topic de destino: {dest_text}\n\n"
+            "De ahora en adelante solo reenvío los mensajes de ese topic. "
+            "Si el destino es un canal (sin topics) y falla, lo reintento sin topic."
+        ),
+        parse_mode="Markdown",
+    )
 
 
 async def ignore_group_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """En grupos el bot solo reenvía: ignora comandos que no sean /chatid."""
+    """En grupos el bot solo reenvía: ignora comandos que no sean /chatid ni /settopic."""
     return
 
 
@@ -720,29 +813,55 @@ async def forward_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if group_id is not None and chat.id != group_id:
         return
 
+    source_thread = _source_thread(chat.id)
+    if source_thread is not None and getattr(message, "message_thread_id", None) != source_thread:
+        return
+
     destinations = _forward_destinations()
     if not destinations:
         return
 
     mode = _forward_mode()
+    dest_thread = _dest_thread(chat.id)
+    if dest_thread is None and source_thread is not None:
+        # Por defecto el mismo número de topic en el destino.
+        dest_thread = source_thread
+
     for dest in destinations:
-        try:
-            if mode == "copy":
-                await context.bot.copy_message(
-                    chat_id=dest,
-                    from_chat_id=chat.id,
-                    message_id=message.message_id,
-                )
-            else:
-                await context.bot.forward_message(
-                    chat_id=dest,
-                    from_chat_id=chat.id,
-                    message_id=message.message_id,
-                )
-        except Forbidden:
-            logger.warning("Reenvío a %s: el bot no tiene permiso para escribir", dest)
-        except (BadRequest, TelegramError) as e:
-            logger.warning("No pude reenviar el mensaje a %s: %s", dest, e)
+        for use_thread in (True, False) if dest_thread is not None else (False,):
+            thread = dest_thread if use_thread else None
+            try:
+                kwargs = {"message_thread_id": thread} if thread is not None else {}
+                if mode == "copy":
+                    await context.bot.copy_message(
+                        chat_id=dest,
+                        from_chat_id=chat.id,
+                        message_id=message.message_id,
+                        **kwargs,
+                    )
+                else:
+                    await context.bot.forward_message(
+                        chat_id=dest,
+                        from_chat_id=chat.id,
+                        message_id=message.message_id,
+                        **kwargs,
+                    )
+                break
+            except Forbidden:
+                logger.warning("Reenvío a %s: el bot no tiene permiso para escribir", dest)
+                break
+            except BadRequest as e:
+                msg = str(e).lower()
+                if use_thread and any(
+                    word in msg for word in ("thread", "topic", "forum", "message_thread_id")
+                ):
+                    logger.info("El destino %s no acepta topics; reintento sin topic", dest)
+                    continue
+                logger.warning("No pude reenviar el mensaje a %s: %s", dest, e)
+                break
+            except TelegramError as e:
+                logger.warning("No pude reenviar el mensaje a %s: %s", dest, e)
+                break
 
 
 async def vida_job(context: ContextTypes.DEFAULT_TYPE):
@@ -833,10 +952,11 @@ def main():
     app = Application.builder().token(BOT_TOKEN).request(request).build()
     # En grupos el bot solo reenvía; /chatid es la única excepción.
     app.add_handler(MessageHandler(
-        filters.ChatType.GROUPS & filters.COMMAND & ~filters.Command("chatid"),
+        filters.ChatType.GROUPS & filters.COMMAND & ~filters.Command(["chatid", "settopic"]),
         ignore_group_command,
     ))
     app.add_handler(CommandHandler("chatid", chatid_command))
+    app.add_handler(CommandHandler("settopic", settopic_command))
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("roles", roles_command))
     app.add_handler(CommandHandler(["rol", "perfil"], role_command))
