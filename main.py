@@ -84,7 +84,7 @@ def sync_vida(update, context):
         unregister_vida(chat.id)
 
 
-# --- Reenvío desde un grupo a contacto y/o canal ---------------------------
+# --- Búsqueda de mensajes viejos entre topics del mismo grupo --------------
 def _parse_ids(raw):
     ids = []
     for part in (raw or "").replace(";", ",").split(","):
@@ -94,41 +94,9 @@ def _parse_ids(raw):
     return ids
 
 
-def _forward_group_id():
-    ids = _parse_ids(os.getenv("FORWARD_GROUP_ID", ""))
-    return ids[0] if ids else None
-
-
-def _forward_destinations():
-    ids = _parse_ids(os.getenv("FORWARD_DEST_IDS", ""))
-    ids += _parse_ids(os.getenv("FORWARD_CONTACT_ID", ""))
-    ids += _parse_ids(os.getenv("FORWARD_CHANNEL_ID", ""))
-    seen = set()
-    return [i for i in ids if not (i in seen or seen.add(i))]
-
-
-def _forward_mode():
-    mode = os.getenv("FORWARD_MODE", "forward").strip().lower()
+def _search_mode():
+    mode = os.getenv("BUSQUEDA_MODE", os.getenv("FORWARD_MODE", "forward")).strip().lower()
     return mode if mode in ("forward", "copy") else "forward"
-
-
-def _env_int(name):
-    ids = _parse_ids(os.getenv(name, ""))
-    return ids[0] if ids else None
-
-
-# topic elegido por grupo: {"source": thread_id | None, "dest": thread_id | None}
-FORWARD_TOPICS = {}
-
-
-def _source_thread(chat_id):
-    per_chat = FORWARD_TOPICS.get(chat_id, {}).get("source")
-    return per_chat if per_chat is not None else _env_int("FORWARD_THREAD_ID")
-
-
-def _dest_thread(chat_id):
-    per_chat = FORWARD_TOPICS.get(chat_id, {}).get("dest")
-    return per_chat if per_chat is not None else _env_int("FORWARD_DEST_THREAD_ID")
 
 
 try:
@@ -136,7 +104,82 @@ try:
 except AttributeError:
     _NO_STATUS_UPDATES = filters.ALL
 
-FORWARD_FILTER = filters.ChatType.GROUPS & ~filters.COMMAND & _NO_STATUS_UPDATES
+TOPIC_RECORD_FILTER = filters.ChatType.GROUPS & ~filters.COMMAND & _NO_STATUS_UPDATES
+
+try:
+    _HISTORY_LIMIT = max(1, int(os.getenv("BUSQUEDA_HISTORY_LIMIT", "500")))
+except ValueError:
+    _HISTORY_LIMIT = 500
+
+# (chat_id, thread_id) -> [message_id]. Solo mensajes que el bot vio en el grupo.
+TOPIC_MESSAGES = {}
+
+# chat_id -> {"source": thread_id, "dest": thread_id}
+SEARCH_TOPICS = {}
+
+# (chat_id, source_thread) -> [message_id] ya reenviados (se reinicia al agotarse).
+SEARCH_USED = {}
+
+
+def _remember_message(chat_id, thread_id, message_id):
+    key = (chat_id, thread_id)
+    bucket = TOPIC_MESSAGES.setdefault(key, [])
+    bucket.append(message_id)
+    if len(bucket) > _HISTORY_LIMIT:
+        del bucket[:-_HISTORY_LIMIT]
+
+
+def _forget_message(chat_id, thread_id, message_id):
+    key = (chat_id, thread_id)
+    bucket = TOPIC_MESSAGES.get(key, [])
+    if message_id in bucket:
+        bucket.remove(message_id)
+    used = SEARCH_USED.get(key, [])
+    if message_id in used:
+        used.remove(message_id)
+
+
+def _pick_message_id(chat_id, source):
+    bucket = TOPIC_MESSAGES.get((chat_id, source), [])
+    if not bucket:
+        return None
+    key = (chat_id, source)
+    used = SEARCH_USED.setdefault(key, [])
+    available = [mid for mid in bucket if mid not in used]
+    if not available:
+        used.clear()
+        available = list(bucket)
+    mid = random.choice(available)
+    used.append(mid)
+    return mid
+
+
+def _thread_from(update, context):
+    args = context.args or []
+    if args:
+        ids = _parse_ids(args[0])
+        if ids:
+            return ids[0]
+    message = update.message if update.message else getattr(update, "callback_query", None)
+    if message is not None and hasattr(message, "message_thread_id"):
+        return message.message_thread_id
+    query = getattr(update, "callback_query", None)
+    if query and query.message:
+        return getattr(query.message, "message_thread_id", None)
+    return None
+
+
+def search_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔎 Otra búsqueda", callback_data="buscar:mas")]
+    ])
+
+
+def search_control_text(source, dest):
+    return md(
+        f"✅ Mensaje reenviado al topic `{dest}`.\n"
+        f"Origen: topic `{source}`. Tocá el botón para buscar otro 👇"
+    )
 
 
 def model_keyboard():
@@ -196,6 +239,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     data = query.data
+
+    if data == "buscar:mas":
+        await busqueda_callback(query, context)
+        return
 
     if data.startswith("model:"):
         key = data.split(":", 1)[1]
@@ -735,133 +782,207 @@ async def chatid_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lines.append(f"• Tu user ID: `{user.id}`")
     lines += [
         "",
-        "Copiá en Railway según corresponda:",
-        f"• Grupo origen → `FORWARD_GROUP_ID={chat.id}`",
-        f"• Contacto destino → `FORWARD_CONTACT_ID={user.id if user else chat.id}`",
-        f"• Canal destino → `FORWARD_CHANNEL_ID={chat.id}`",
-        "",
-        "Para elegir temas (topics):",
-        "• Escribí `/settopic` dentro del topic de origen.",
-        "• `/settopic 123` → ese topic de origen y el topic `123` como destino.",
-        "• `/settopic off` → volver a reenviar todo, sin filtrar por topic.",
+        "Para buscar mensajes viejos entre topics del mismo grupo:",
+        "• `/setorigen` dentro del topic de origen (o `/setorigen 123`).",
+        "• `/setdestino` dentro del topic de destino (o `/setdestino 456`).",
+        "• Después escribí `/BUSQUEDA` en el destino.",
     ]
     await message.reply_text(md("\n".join(lines)), parse_mode="Markdown")
 
 
-async def settopic_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Elegí el topic de origen (donde llamás al bot) y el topic de destino."""
+async def setorigen_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Marca el topic del cual se van a tomar los mensajes viejos."""
     chat = update.effective_chat
     message = update.message
     if not chat or not message:
         return
 
-    args = context.args or []
-    if args and args[0].lower() in ("off", "todo", "todos", "reset", "limpiar"):
-        FORWARD_TOPICS.pop(chat.id, None)
+    thread = _thread_from(update, context)
+    if thread is None:
         await message.reply_text(
-            md("Listo: reenvío sin filtro de topic otra vez."),
+            md("Escribí `/setorigen` dentro de un topic, o pasá el ID: `/setorigen 123`."),
             parse_mode="Markdown",
         )
         return
 
-    source = getattr(message, "message_thread_id", None)
-    if not source:
-        await message.reply_text(
-            md(
-                "Este comando tiene que escribirse *dentro de un topic* del grupo. "
-                "Ahí es donde el bot va a escuchar los mensajes."
-            ),
-            parse_mode="Markdown",
-        )
-        return
-
-    dest = None
-    if args:
-        ids = _parse_ids(args[0])
-        dest = ids[0] if ids else None
-
-    FORWARD_TOPICS[chat.id] = {"source": source, "dest": dest}
-    dest_text = f"`{dest}`" if dest is not None else "el mismo topic en el destino"
+    settings = SEARCH_TOPICS.setdefault(chat.id, {})
+    settings["source"] = thread
+    SEARCH_USED.pop((chat.id, thread), None)
     await message.reply_text(
         md(
-            f"Listo ✅\n\n"
-            f"• Topic de origen: `{source}`\n"
-            f"• Topic de destino: {dest_text}\n\n"
-            "De ahora en adelante solo reenvío los mensajes de ese topic. "
-            "Si el destino es un canal (sin topics) y falla, lo reintento sin topic."
+            f"Origen marcado ✅ Topic `{thread}`. "
+            "Ahora marcá el destino con `/setdestino` dentro del otro topic."
         ),
         parse_mode="Markdown",
     )
 
 
+async def setdestino_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Marca el topic donde se publican los mensajes encontrados."""
+    chat = update.effective_chat
+    message = update.message
+    if not chat or not message:
+        return
+
+    thread = _thread_from(update, context)
+    if thread is None:
+        await message.reply_text(
+            md("Escribí `/setdestino` dentro de un topic, o pasá el ID: `/setdestino 456`."),
+            parse_mode="Markdown",
+        )
+        return
+
+    SEARCH_TOPICS.setdefault(chat.id, {})["dest"] = thread
+    source = SEARCH_TOPICS[chat.id].get("source")
+    source_text = f" y origen `{source}`" if source is not None else ""
+    await message.reply_text(
+        md(f"Destino marcado ✅ Topic `{thread}`{source_text}. Escribí `/BUSQUEDA` para probar."),
+        parse_mode="Markdown",
+    )
+
+
 async def ignore_group_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """En grupos el bot solo reenvía: ignora comandos que no sean /chatid ni /settopic."""
+    """En grupos el bot solo atiende los comandos de búsqueda; el resto lo ignoran."""
     return
 
 
-async def forward_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def remember_topic_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Guarda los mensajes que el bot ve en topics para poder buscarlos después."""
     message = update.message
     chat = update.effective_chat
     if not message or not chat:
         return
-
     sender = message.from_user
     if sender and sender.is_bot:
         return
+    thread = getattr(message, "message_thread_id", None)
+    if thread is None:
+        return
+    _remember_message(chat.id, thread, message.message_id)
 
-    group_id = _forward_group_id()
-    if group_id is not None and chat.id != group_id:
+
+async def _forward_search_message(context, chat_id, source, dest):
+    """Reenvía un mensaje aleatorio del topic origen al topic destino."""
+    for _ in range(5):
+        message_id = _pick_message_id(chat_id, source)
+        if message_id is None:
+            return False, (
+                f"No tengo mensajes guardados del topic `{source}` todavía. "
+                "Los mensajes anteriores a que el bot entrara al grupo no son accesibles."
+            )
+
+        kwargs = {"message_thread_id": dest} if dest is not None else {}
+        try:
+            if _search_mode() == "copy":
+                await context.bot.copy_message(
+                    chat_id=chat_id,
+                    from_chat_id=chat_id,
+                    message_id=message_id,
+                    **kwargs,
+                )
+            else:
+                await context.bot.forward_message(
+                    chat_id=chat_id,
+                    from_chat_id=chat_id,
+                    message_id=message_id,
+                    **kwargs,
+                )
+            return True, None
+        except BadRequest as e:
+            text = str(e).lower()
+            if any(word in text for word in ("thread", "topic", "forum", "message_thread_id")):
+                return False, (
+                    f"El topic `{dest}` no es válido o el bot no puede publicar ahí. "
+                    "Revisá `/setdestino`."
+                )
+            logger.info("Descartando mensaje %s del historial: %s", message_id, e)
+            _forget_message(chat_id, source, message_id)
+        except Forbidden:
+            return False, "El bot no tiene permiso para escribir en ese topic."
+        except TelegramError as e:
+            return False, str(e)
+    return False, "No pude reenviar ningún mensaje. Probá otra vez."
+
+
+async def busqueda_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """'/BUSQUEDA': trae un mensaje viejo del origen y lo publica en el destino."""
+    chat = update.effective_chat
+    message = update.message
+    if not chat or not message:
         return
 
-    source_thread = _source_thread(chat.id)
-    if source_thread is not None and getattr(message, "message_thread_id", None) != source_thread:
+    settings = SEARCH_TOPICS.get(chat.id, {})
+    source = settings.get("source")
+    dest = settings.get("dest")
+    current = getattr(message, "message_thread_id", None)
+    if dest is None:
+        dest = current
+
+    if source is None:
+        await message.reply_text(
+            md("Primero marcá el origen con `/setorigen` dentro del topic de origen."),
+            parse_mode="Markdown",
+        )
+        return
+    if dest is None:
+        await message.reply_text(
+            md("Marcá el destino con `/setdestino` dentro del topic donde querés publicar."),
+            parse_mode="Markdown",
+        )
         return
 
-    destinations = _forward_destinations()
-    if not destinations:
+    ok, error = await _forward_search_message(context, chat.id, source, dest)
+    if not ok:
+        await message.reply_text(md(error), parse_mode="Markdown")
         return
 
-    mode = _forward_mode()
-    dest_thread = _dest_thread(chat.id)
-    if dest_thread is None and source_thread is not None:
-        # Por defecto el mismo número de topic en el destino.
-        dest_thread = source_thread
+    await message.reply_text(
+        search_control_text(source, dest),
+        reply_markup=search_keyboard(),
+        parse_mode="Markdown",
+    )
 
-    for dest in destinations:
-        for use_thread in (True, False) if dest_thread is not None else (False,):
-            thread = dest_thread if use_thread else None
-            try:
-                kwargs = {"message_thread_id": thread} if thread is not None else {}
-                if mode == "copy":
-                    await context.bot.copy_message(
-                        chat_id=dest,
-                        from_chat_id=chat.id,
-                        message_id=message.message_id,
-                        **kwargs,
-                    )
-                else:
-                    await context.bot.forward_message(
-                        chat_id=dest,
-                        from_chat_id=chat.id,
-                        message_id=message.message_id,
-                        **kwargs,
-                    )
-                break
-            except Forbidden:
-                logger.warning("Reenvío a %s: el bot no tiene permiso para escribir", dest)
-                break
-            except BadRequest as e:
-                msg = str(e).lower()
-                if use_thread and any(
-                    word in msg for word in ("thread", "topic", "forum", "message_thread_id")
-                ):
-                    logger.info("El destino %s no acepta topics; reintento sin topic", dest)
-                    continue
-                logger.warning("No pude reenviar el mensaje a %s: %s", dest, e)
-                break
-            except TelegramError as e:
-                logger.warning("No pude reenviar el mensaje a %s: %s", dest, e)
-                break
+
+async def busqueda_callback(query, context):
+    """El botón 'Otra búsqueda' repite la búsqueda en el mismo topic destino."""
+    if not query.message or not query.message.chat:
+        return
+    chat_id = query.message.chat.id
+    dest = getattr(query.message, "message_thread_id", None)
+    settings = SEARCH_TOPICS.get(chat_id, {})
+    source = settings.get("source")
+    if dest is None:
+        dest = settings.get("dest")
+
+    if source is None:
+        await query.edit_message_text(
+            md("Primero marcá el origen con `/setorigen`."),
+            reply_markup=search_keyboard(),
+            parse_mode="Markdown",
+        )
+        return
+    if dest is None:
+        await query.edit_message_text(
+            md("No encontré el topic destino. Marcá uno con `/setdestino`."),
+            reply_markup=search_keyboard(),
+            parse_mode="Markdown",
+        )
+        return
+
+    ok, error = await _forward_search_message(context, chat_id, source, dest)
+    if not ok:
+        await query.edit_message_text(
+            md(f"No pude buscar otro: {error}"),
+            reply_markup=search_keyboard(),
+            parse_mode="Markdown",
+        )
+        return
+
+    await query.edit_message_text(
+        search_control_text(source, dest),
+        reply_markup=search_keyboard(),
+        parse_mode="Markdown",
+    )
 
 
 async def vida_job(context: ContextTypes.DEFAULT_TYPE):
@@ -950,13 +1071,19 @@ def main():
     logger.info("Xhot Bot - modos disponibles: %s", ", ".join(grok_chat.mode_names()))
     request = HTTPXRequest(connect_timeout=20, read_timeout=120, write_timeout=120, pool_timeout=20)
     app = Application.builder().token(BOT_TOKEN).request(request).build()
-    # En grupos el bot solo reenvía; /chatid es la única excepción.
+    # En grupos el bot solo atiende los comandos de búsqueda; el resto se ignoran.
+    group_commands = [
+        "chatid", "setorigen", "origen", "settopic",
+        "setdestino", "destino", "busqueda", "BUSQUEDA",
+    ]
     app.add_handler(MessageHandler(
-        filters.ChatType.GROUPS & filters.COMMAND & ~filters.Command(["chatid", "settopic"]),
+        filters.ChatType.GROUPS & filters.COMMAND & ~filters.Command(group_commands),
         ignore_group_command,
     ))
     app.add_handler(CommandHandler("chatid", chatid_command))
-    app.add_handler(CommandHandler("settopic", settopic_command))
+    app.add_handler(CommandHandler(["setorigen", "origen", "settopic"], setorigen_command))
+    app.add_handler(CommandHandler(["setdestino", "destino"], setdestino_command))
+    app.add_handler(CommandHandler(["busqueda", "BUSQUEDA"], busqueda_command))
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("roles", roles_command))
     app.add_handler(CommandHandler(["rol", "perfil"], role_command))
@@ -966,8 +1093,11 @@ def main():
     app.add_handler(CommandHandler("vida", vida_command))
     app.add_handler(CommandHandler("reset", reset_command))
     app.add_handler(CallbackQueryHandler(button_handler))
-    app.add_handler(MessageHandler(FORWARD_FILTER, forward_handler))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
+    app.add_handler(MessageHandler(TOPIC_RECORD_FILTER, remember_topic_message))
+    app.add_handler(MessageHandler(
+        filters.TEXT & ~filters.COMMAND & ~filters.ChatType.GROUPS,
+        text_handler,
+    ))
     app.add_error_handler(error_handler)
 
     interval = max(1, int(os.getenv("VIDA_INTERVAL_MINUTES", "30"))) * 60

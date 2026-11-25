@@ -61,44 +61,38 @@ redeploy hay que volver a activarlo con `/vida` (o `/modo vida`). Si el proceso 
 reinicia sin redeploy, se re-registra automáticamente cuando el usuario escribe o
 usa `/start`.
 
-## Reenvío desde un grupo a un contacto y/o un canal
+## Búsqueda de mensajes viejos entre topics (`/BUSQUEDA`)
 
-El bot puede reenviar **todo tipo de mensaje** (texto, fotos, videos, audios, documentos,
-álbumes) desde un grupo que ya tenés hacia un contacto y un canal a la vez. En el grupo
-queda **silencioso**: no responde con roleplay ni con comandos (salvo `/chatid` y `/settopic`).
+El bot trabaja **dentro de un mismo grupo con Temas**. Ya no reenvía automáticamente a
+contactos ni canales: cuando se lo pedís, toma un mensaje viejo de un topic **origen**
+y lo publica en un topic **destino**. En el grupo queda silencioso: no responde con
+roleplay ni con otros comandos.
 
 Configuración paso a paso:
 
 1. En BotFather hacé `/setprivacy` → elegí el bot → **Disable**. Si no, Telegram solo le
-   entrega al bot los comandos y las respuestas dirigidas a él, no el resto del grupo.
-2. Agregá al bot al grupo de origen.
-3. Si va a publicar en un canal, agregalo como **administrador** con permiso de publicar.
-4. Escribí `/chatid` en el grupo y en el chat del contacto, y copiá los IDs. Para el canal,
-   reenviá un mensaje suyo a un bot tipo `@get_id_bot` (o mirá el ID en la URL de Telegram Web).
-5. Cargá en Railway:
+   entrega al bot los comandos, no los mensajes del grupo.
+2. Agregá al bot al grupo con Temas.
+3. Entrá al topic de origen y escribí `/setorigen` (o `/setorigen 123` si ya sabés el ID).
+4. Entrá al topic de destino y escribí `/setdestino` (o `/setdestino 456`).
+5. Escribí `/BUSQUEDA` en el destino. El bot reenvía un mensaje al azar del origen y deja
+   un botón **🔎 Otra búsqueda**. Cada toque trae otro mensaje, sin repetir hasta agotar
+   los guardados (después vuelve a empezar el ciclo).
+6. `/chatid` muestra el ID del topic actual, por si querés pasarlo como argumento.
 
-   - `FORWARD_GROUP_ID` → ID del grupo de origen (si lo dejás vacío, reenvía desde cualquier grupo).
-   - `FORWARD_CONTACT_ID` → ID del contacto destino.
-   - `FORWARD_CHANNEL_ID` → ID del canal destino.
-   - `FORWARD_DEST_IDS` → alternativa: ambos IDs en una sola lista separada por coma.
-   - `FORWARD_MODE` → `forward` (default, conserva el encabezado "Reenviado desde…") o `copy`
-     (publica una copia limpia, sin el encabezado).
+Opcional en Railway:
 
-6. **Elegir topics (opcional)**: entrá al topic del grupo desde el que querés reenviar y escribí:
+- `BUSQUEDA_MODE` → `forward` (default, conserva el encabezado "Reenviado desde…") o `copy`
+  (publica una copia limpia, sin el encabezado).
+- `BUSQUEDA_HISTORY_LIMIT` → cuántos mensajes por topic se guardan en memoria (default `500`).
 
-   - `/settopic` → solo se reenvían los mensajes de ese topic y se publican en el topic del
-     mismo número en el destino.
-   - `/settopic 123` → origen = el topic actual, destino = topic `123`.
-   - `/settopic off` → volver a reenviar todo el grupo, sin filtrar.
+**Limitación importante:** la API de bots de Telegram no puede leer mensajes anteriores a
+que el bot entrara al grupo. Solo se pueden buscar los mensajes que el bot vio mientras
+estuvo en el grupo con la privacidad desactivada. Los álbumes se guardan foto por foto;
+los mensajes de servicio y los comandos se ignoran.
 
-   También podés fijarlos con `FORWARD_THREAD_ID` (origen) y `FORWARD_DEST_THREAD_ID` (destino).
-   Si el destino es un canal (no tiene topics), el bot reintenta automáticamente sin topic.
-
-7. Redeploy para que tome las variables.
-
-Notas: los álbumes se reenvían foto por foto (Telegram no permite reenviar el grupo completo
-como una sola unidad). Los mensajes de servicio (nuevos miembros, cambios de título, etc.)
-se ignoran. Si el bot es el autor del mensaje, también se ignora para evitar bucles.
+El estado (topics elegidos e historial) vive en memoria: se resetea al redeploy y hay que
+marcar otra vez los topics con `/setorigen` y `/setdestino`.
 
 ## Deploy en Railway
 
